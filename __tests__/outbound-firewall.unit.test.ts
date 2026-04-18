@@ -166,4 +166,69 @@ describe("filterOutbound", () => {
     expect(result.blocked_urls).toBeDefined()
     expect(result.blocked_urls?.[0]).toMatch(/weird\.com/)
   })
+
+  // ── Unicode-invisible + non-HTTP(S) scheme bypass fixes ─────────────────
+
+  it("blocks a URL that uses zero-width separators inside the hostname", () => {
+    const profile: ClientProfile = {
+      outbound_url_allowlist: ["acme.com"],
+    }
+    // ZWSP (U+200B) inserted between `evil` and `.com` — a renderer that
+    // strips invisibles would still linkify evil.com, so the firewall
+    // must normalize before matching.
+    const result = filterOutbound(
+      "visit https://evil\u200B.com/phish now",
+      profile,
+    )
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toBe("url_not_in_allowlist")
+    expect(result.blocked_urls?.[0]).toMatch(/evil\.com/)
+  })
+
+  it("still allows an allowlisted URL even when zero-width chars are sprinkled in", () => {
+    const profile: ClientProfile = {
+      booking_link: "https://example.com/book",
+    }
+    // ZWJ (U+200D) inside the path — doesn't change the hostname.
+    const result = filterOutbound(
+      "book at https://example.com/bo\u200Dok/slot",
+      profile,
+    )
+    expect(result.allowed).toBe(true)
+  })
+
+  it("blocks a javascript: URI even when no allowlist is configured", () => {
+    const result = filterOutbound(
+      "click here: javascript:alert(1)",
+      null, // null profile would normally be fail-permissive
+    )
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toBe("url_not_in_allowlist")
+    expect(result.blocked_urls?.[0]).toMatch(/javascript:/i)
+  })
+
+  it("blocks a data: URI that tries to smuggle HTML", () => {
+    const profile: ClientProfile = {
+      outbound_url_allowlist: ["acme.com"],
+    }
+    const result = filterOutbound(
+      "preview: data:text/html;base64,PHNjcmlwdD4=",
+      profile,
+    )
+    expect(result.allowed).toBe(false)
+    expect(result.blocked_urls?.[0]).toMatch(/^data:/i)
+  })
+
+  it("blocks file: and about: schemes alongside any http URLs", () => {
+    const profile: ClientProfile = {
+      outbound_url_allowlist: ["acme.com"],
+    }
+    const result = filterOutbound(
+      "open file:///etc/passwd and about:blank",
+      profile,
+    )
+    expect(result.allowed).toBe(false)
+    expect(result.blocked_urls?.some((u) => /^file:/i.test(u))).toBe(true)
+    expect(result.blocked_urls?.some((u) => /^about:/i.test(u))).toBe(true)
+  })
 })
