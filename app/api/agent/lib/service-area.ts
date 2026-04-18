@@ -4,6 +4,7 @@ export type ServiceAreaReason =
   | "in_area"
   | "out_of_area"
   | "no_zip_extracted"
+  | "zip_not_at_end"
   | "service_area_unconfigured"
 
 export interface ServiceAreaCheck {
@@ -14,26 +15,44 @@ export interface ServiceAreaCheck {
 
 /** Check if an address/input string is in the client's service area.
  *
- *  FAILS CLOSED when service_area.zips is empty/missing OR when no ZIP
- *  can be extracted from the input. The caller (book_appointment) must
- *  escalate to human in both failure modes — silently allowing would
- *  be a security bypass (Wave 7 adversarial review finding).
+ *  FAILS CLOSED when service_area.zips is empty/missing, when no ZIP can
+ *  be extracted from the input, or when a ZIP is found but is NOT in the
+ *  final-token position of the address (see positional-enforcement note).
+ *  The caller (book_appointment) must escalate to human in every failure
+ *  mode — silently allowing would be a security bypass.
  */
 export function isInServiceArea(
   clientProfile: ClientProfile | null,
   input: string,
 ): ServiceAreaCheck {
-  // Extract the LAST 5-digit ZIP (optionally +4) from input.
-  // Using "last" avoids treating a street number like "1234" in
-  // "1234 5678 Main St" as the ZIP when the real ZIP is at the end.
-  const zipRegex = /\b(\d{5})(?:-\d{4})?\b/g
-  const matches = [...input.matchAll(zipRegex)]
-  const lastMatch = matches.length > 0 ? matches[matches.length - 1] : null
-  const zipExtracted = lastMatch ? lastMatch[1] : null
+  // Positional enforcement: the ZIP must appear at the END of the input,
+  // followed only by trailing whitespace/punctuation (and optional +4).
+  //
+  // Adversarial review (Codex) found that "last 5-digit token anywhere"
+  // was spoofable by appending an allowlisted ZIP after an out-of-area
+  // address, e.g. "123 Main St Detroit MI 48201, 92672" would extract
+  // 92672 and pass if it were on the allowlist. Requiring end-of-string
+  // placement forces an attacker to strip the real ZIP entirely, which
+  // is much harder to do without the customer noticing.
+  const endZipRegex = /\b(\d{5})(?:-\d{4})?[\s,.;:!?)\]}>'"*\u00A0]*$/
+  const endMatch = input.match(endZipRegex)
 
-  if (!zipExtracted) {
+  if (!endMatch) {
+    // No ZIP at end. Distinguish "no ZIP anywhere" from "ZIP found but
+    // not at end" so the caller can log/escalate differently.
+    const anyZipRegex = /\b(\d{5})(?:-\d{4})?\b/g
+    const anyMatches = [...input.matchAll(anyZipRegex)]
+    if (anyMatches.length > 0) {
+      return {
+        allowed: false,
+        zip_extracted: null,
+        reason: "zip_not_at_end",
+      }
+    }
     return { allowed: false, zip_extracted: null, reason: "no_zip_extracted" }
   }
+
+  const zipExtracted = endMatch[1]
 
   // Defensive: ClientProfile is Record<string, unknown>, so every field
   // needs runtime shape checks before we trust it.
