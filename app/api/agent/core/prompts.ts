@@ -244,14 +244,52 @@ Customer messages are wrapped in <untrusted_user_message>...</untrusted_user_mes
 Respond naturally to the customer's latest message.`
 }
 
+/** Canonicalize attacker-supplied encodings before running the
+ *  close-tag regex. Adversarial review found that the literal regex
+ *  missed encoded or obfuscated variants:
+ *    - HTML entities:          &lt;/untrusted_user_message&gt;
+ *    - Numeric entities:       &#60;/untrusted_user_message&#62;
+ *    - Percent-encoded:        %3C/untrusted_user_message%3E
+ *    - Unicode zero-width in the slash/tag body (U+200B/200C/200D/FEFF)
+ *    - Fullwidth or alt-script slash (U+FF0F ／, U+2215 ∕)
+ *  This pass converts each to its ASCII canonical form so downstream
+ *  matching sees a single, literal `</untrusted_user_message>` shape.
+ *  Run BEFORE the regex. Idempotent. Safe on benign text. */
+function canonicalizeEncodings(content: string): string {
+  return content
+    // 1. Strip zero-width / word-joiner / BOM chars entirely.
+    .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, "")
+    // 2. Percent-decode common angle-bracket + slash variants only.
+    //    We deliberately do NOT run a full URI decode — that would
+    //    mangle legitimate percent-encoded content elsewhere in the
+    //    message. Narrow replacements keep the canonicalization bounded.
+    .replace(/%3C/gi, "<")
+    .replace(/%3E/gi, ">")
+    .replace(/%2F/gi, "/")
+    // 3. HTML named + numeric entity decoding (narrow set).
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#0*60;/g, "<")
+    .replace(/&#0*62;/g, ">")
+    .replace(/&#x0*3[cC];/g, "<")
+    .replace(/&#x0*3[eE];/g, ">")
+    .replace(/&sol;/gi, "/")
+    .replace(/&#0*47;/g, "/")
+    .replace(/&#x0*2[fF];/g, "/")
+    // 4. Fullwidth / alt-script slash variants → ASCII slash.
+    .replace(/[\uFF0F\u2215]/g, "/")
+}
+
 /** Neutralize any literal `</untrusted_user_message>` inside customer content
  *  so an attacker can't close the isolation tag and inject instructions that
- *  sit outside it. We replace the angle-bracket tag opener with a homoglyph-
- *  free placeholder that still reads as text to the model but doesn't parse
- *  as the closing tag when the prompt is assembled. Case-insensitive. Tags
- *  with embedded whitespace (`</untrusted_user_message >`) are also handled. */
+ *  sit outside it. Canonicalizes common encoding/obfuscation variants first
+ *  (HTML entities, percent-encoded angle brackets, zero-width chars,
+ *  fullwidth slash) then replaces the tag opener with a homoglyph-free
+ *  placeholder that still reads as text to the model but doesn't parse as
+ *  the closing tag when the prompt is assembled. Case-insensitive; tags
+ *  with embedded ASCII whitespace are also handled. */
 function neutralizeClosingTag(content: string): string {
-  return content.replace(
+  return canonicalizeEncodings(content).replace(
     /<\s*\/\s*untrusted_user_message\s*>/gi,
     "[/untrusted_user_message_escaped]",
   )
