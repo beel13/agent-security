@@ -4,9 +4,9 @@ Defensive patterns for a multi-channel AI agent: tool-boundary invariants, outbo
 
 ## What this is
 
-A point-in-time snapshot of the agent subsystem from a private production Next.js codebase that runs customer-facing AI assistants for small service businesses. It exists so a reader of the write-up can verify the cited code and run the tests in a few minutes without needing access to the private repo.
+A point-in-time snapshot of the agent subsystem from a private production Next.js codebase I built and operate. The system runs customer-facing AI assistants for small service businesses. Every defense documented here is applied to software I own, and the adversarial review loop that surfaces the findings targets my own deployment. This repo exists so a reader of the write-up can verify the cited code and run the tests in about five minutes, without needing access to the private repo.
 
-Not a fork. No commit history carries over. Platform adapter implementations (Twilio, Gmail, Facebook, Instagram) and Supabase runtime client are replaced by stubs that throw on call; tests mock them at the module boundary, so the stubs are never exercised in the test suite.
+Not a fork. No commit history carries over. Platform adapter implementations (Twilio, Gmail, Facebook, Instagram) and the Supabase runtime client are replaced by stubs that throw on call; tests mock them at the module boundary, so the stubs are never hit.
 
 ## The write-up
 
@@ -19,7 +19,7 @@ npm install
 npm test
 ```
 
-Target: 21 passing tests (9 from `prompt-injection-boundary.test.ts`, 12 from `outbound-firewall.unit.test.ts`).
+Target: 42 passing tests (15 from `prompt-injection-boundary.test.ts`, 17 from `outbound-firewall.unit.test.ts`, 10 from `service-area.unit.test.ts`). The count grows over time as adversarial review finds new bypass classes and adds regression tests.
 
 ```
 npm run typecheck
@@ -61,10 +61,10 @@ These all live in the private production repo.
 
 Two files are replaced by throwing stubs for this snapshot:
 
-- `app/api/agent/platforms/index.ts` — real version wires platform adapters. Stub throws on `getAdapter()`.
-- `lib/supabase/server.ts` — real version imports `next/headers` and instantiates an env-configured client. Stub throws on `createServiceClient()`.
+- `app/api/agent/platforms/index.ts`: real version wires platform adapters. Stub throws on `getAdapter()`.
+- `lib/supabase/server.ts`: real version imports `next/headers` and instantiates an env-configured client. Stub throws on `createServiceClient()`.
 
-Tests pass because both are replaced via `vi.mock` at the module boundary before any code runs. A live run of the agent against these stubs would fail loudly on the first platform send or Supabase call, which is the intended behavior — the snapshot is for review and test verification, not live operation.
+Tests pass because both are replaced via `vi.mock` at the module boundary before any code runs. A live run of the agent against these stubs would fail loudly on the first platform send or Supabase call. That's intentional: the snapshot is for review and test verification, not live operation.
 
 ## License
 
